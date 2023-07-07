@@ -57,7 +57,7 @@ def parse_args(args):
         "--stage_1_training_steps",
         type=int,
         help="Number of training steps in first stage training",
-        default=50000,
+        default=100000,
     )
     parser.add_argument(
         "--stage_2_training_steps",
@@ -130,8 +130,6 @@ def parse_args(args):
     # )
     first_stage_weights = first_stage_model.get_weights()
 
-    # end of first stage training
-    print("second stage")
     # ### second stage training
     config["image_loss_weight"] *= 10  # increase image loss weight
     second_stage_model = confignet.ConfigNet(config)
@@ -146,7 +144,7 @@ def parse_args(args):
         args.log_dir,
         n_steps=args.stage_2_training_steps,
         n_samples_for_metrics=args.n_samples_for_metrics,
-    )  # , aml_run=aml_run
+    )
 
 
 if __name__ == "__main__":

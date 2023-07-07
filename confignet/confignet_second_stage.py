@@ -65,7 +65,8 @@ class ConfigNet(ConfigNetFirstStage):
         super(ConfigNet, self).initialize_network()
 
         self.encoder = RealEncoder(
-            self.config["latent_dim"], self.config["output_shape"],
+            self.config["latent_dim"],
+            self.config["output_shape"],
         )
         self.encoder(np.zeros((1, *self.config["output_shape"]), np.float32))
 
@@ -270,21 +271,23 @@ class ConfigNet(ConfigNetFirstStage):
             #     synth_imgs, generator_output_synth, eye_masks
             # )
             losses["focal_synth"] = 1 * self.focal_frequency_loss(
-                    tf.transpose(synth_imgs, perm=[0, 3, 1, 2]),
-                    tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
-                )
+                tf.transpose(synth_imgs, perm=[0, 3, 1, 2]),
+                tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
+            )
             losses["focal_real"] = 1 * self.focal_frequency_loss(
-                    tf.transpose(real_imgs, perm=[0, 3, 1, 2]),
-                    tf.transpose(generator_output_real, perm=[0, 3, 1, 2]),
-                )
-            
+                tf.transpose(real_imgs, perm=[0, 3, 1, 2]),
+                tf.transpose(generator_output_real, perm=[0, 3, 1, 2]),
+            )
+
             # GAN loss for synth
-            discriminator_output_synth, _ = self.synth_discriminator(
-                generator_output_synth, training=True,
+            discriminator_output_synth, _ = self.discriminator(
+                generator_output_synth,
+                training=True,
             )
             # GAN loss for real
             discriminator_output_real, _ = self.discriminator(
-                generator_output_real, training=True,
+                generator_output_real,
+                training=True,
             )
 
             if tf.math.equal(self.step % self.D_reg_interval, 0):
@@ -470,13 +473,8 @@ class ConfigNet(ConfigNetFirstStage):
             for _ in range(self.config["n_discriminator_updates"]):
                 self.step = step
                 d_loss = self.discriminator_training_step(
-                    real_training_set, discriminator_optimizer
+                    real_training_set, synth_training_set, discriminator_optimizer
                 )
-
-                synth_d_loss = self.synth_discriminator_training_step(
-                    synth_training_set, discriminator_optimizer
-                )
-
                 latent_d_loss = self.latent_discriminator_training_step(
                     real_training_set, synth_training_set, discriminator_optimizer
                 )
@@ -492,15 +490,14 @@ class ConfigNet(ConfigNetFirstStage):
             print(
                 "[D loss: %f] [synth_D loss: %f] [latent_D_loss: %f] [G loss: %f]"
                 % (
-                    d_loss["loss_sum"],
-                    synth_d_loss["loss_sum"],
+                    d_loss["real_d_loss"],
+                    d_loss["synth_d_loss"],
                     latent_d_loss["loss_sum"],
                     g_loss["loss_sum"],
                 )
             )
             confignet_utils.update_loss_dict(self.g_losses, g_loss)
             confignet_utils.update_loss_dict(self.d_losses, d_loss)
-            confignet_utils.update_loss_dict(self.synth_d_losses, synth_d_loss)
             confignet_utils.update_loss_dict(self.latent_d_losses, latent_d_loss)
 
             iteration_time = training_iteration_end - training_iteration_start
@@ -616,7 +613,11 @@ class ConfigNet(ConfigNetFirstStage):
 
                 # Latent regression loss start
                 latent_regression_labels = tf.concat(
-                    (embeddings, self.config["latent_regressor_rot_weight"],), axis=-1,
+                    (
+                        embeddings,
+                        self.config["latent_regressor_rot_weight"],
+                    ),
+                    axis=-1,
                 )
 
                 # Regression of Z and rotation from output image
@@ -649,4 +650,3 @@ class ConfigNet(ConfigNetFirstStage):
             axis=1,
         )
         return embeddings.numpy()
-

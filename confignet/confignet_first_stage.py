@@ -50,13 +50,12 @@ class ConfigNetFirstStage:
         self.combined_model = None
         self.latent_regressor = None
         self.latent_discriminator = None
-        self.synth_discriminator = None
 
         self.log_writer = None
         self.g_losses = {}
         self.d_losses = {}
         self.metrics = {}
-        self.synth_d_losses = {}
+
         self.latent_d_losses = {}
 
         self._checkpoint_visualization_input = None
@@ -66,9 +65,8 @@ class ConfigNetFirstStage:
         self.n_checkpoint_samples = 10
         self.G_reg_interval = 8
         self.D_reg_interval = 16
-        self.gamma = 0.0002 * (256 ** 2) / self.config["batch_size"]
+        self.gamma = 0.0002 * (256**2) / self.config["batch_size"]
 
-        #
         # Remove the inputs that do not have a defined input dimensions
         self.config["facemodel_inputs"] = {
             key: value
@@ -109,7 +107,6 @@ class ConfigNetFirstStage:
         weights[
             "latent_discriminator_weights"
         ] = self.latent_discriminator.get_weights()
-        weights["synth_discriminator_weights"] = self.synth_discriminator.get_weights()
 
         return weights
 
@@ -120,7 +117,6 @@ class ConfigNetFirstStage:
         self.latent_regressor.set_weights(weights["latent_regressor_weights"])
         self.synthetic_encoder.set_weights(weights["synthetic_encoder_weights"])
         self.latent_discriminator.set_weights(weights["latent_discriminator_weights"])
-        self.synth_discriminator.set_weights(weights["synth_discriminator_weights"])
 
     def get_training_step_number(self):
         step_number = (
@@ -209,8 +205,6 @@ class ConfigNetFirstStage:
         )
         self.discriminator = StyleGAN2Discriminator(**discriminiator_args)
         self.discriminator.build(discriminator_input_shape)
-        self.synth_discriminator = StyleGAN2Discriminator(**discriminiator_args)
-        self.synth_discriminator.build(discriminator_input_shape)
 
         generator_args = {
             "resolution": self.config["output_shape"][0],
@@ -450,13 +444,7 @@ class ConfigNetFirstStage:
         step_number = self.get_training_step_number()
 
         if step_number % self.config["image_checkpoint_period"] == 0:
-            confignet_utils.log_loss_vals(
-                self.synth_d_losses,
-                output_dir,
-                step_number,
-                "synth_discriminator_",
-                tb_log_writer=self.log_writer,
-            )
+
             confignet_utils.log_loss_vals(
                 self.latent_d_losses,
                 output_dir,
@@ -514,64 +502,61 @@ class ConfigNetFirstStage:
                     "perf/checkpoint_time", checkpoint_time, step=step_number
                 )
 
-    def discriminator_training_step(self, training_set, optimizer):
+    def discriminator_training_step(self, training_set, synth_training_set, optimizer):
         real_imgs, fake_imgs = self.get_discriminator_batch(training_set)
-
+        syth_imgs, syth_fake_imgs = self.get_synth_discriminator_batch(
+            synth_training_set
+        )
+        losses = {}
         with tf.GradientTape() as tape:
             if tf.math.equal(self.step % self.D_reg_interval, 0):
                 """With r1 regulation."""
-                losses, D_reg = compute_stylegan_discriminator_loss(
+                real_losses, D_reg = compute_stylegan_discriminator_loss(
                     self.discriminator,
                     real_imgs,
                     fake_imgs,
                     gamma=self.gamma,
                     compute_reg=True,
                 )
+                synth_losses, D_reg = compute_stylegan_discriminator_loss(
+                    self.discriminator,
+                    syth_imgs,
+                    syth_fake_imgs,
+                    gamma=self.gamma,
+                    compute_reg=True,
+                )
+
+                losses["real_d_loss"] = real_losses["loss_sum"]
+                losses["synth_d_loss"] = synth_losses["loss_sum"]
+                losses["loss_sum"] = (
+                    0.5 * losses["real_d_loss"] + 0.5 * losses["synth_d_loss"]
+                )
                 losses["loss_sum"] += tf.reduce_mean(D_reg * self.D_reg_interval)
             else:
-                losses, _ = compute_stylegan_discriminator_loss(
+                real_losses, _ = compute_stylegan_discriminator_loss(
                     self.discriminator,
                     real_imgs,
                     fake_imgs,
                     gamma=self.gamma,
                     compute_reg=False,
+                )
+                synth_losses, _ = compute_stylegan_discriminator_loss(
+                    self.discriminator,
+                    syth_imgs,
+                    syth_fake_imgs,
+                    gamma=self.gamma,
+                    compute_reg=False,
+                )
+                losses["real_d_loss"] = real_losses["loss_sum"]
+                losses["synth_d_loss"] = synth_losses["loss_sum"]
+                losses["loss_sum"] = (
+                    0.5 * losses["real_d_loss"] + 0.5 * losses["synth_d_loss"]
                 )
         if losses["loss_sum"] is None:
             print("discriminator_training_step")
             breakpoint()
 
         trainable_weights = self.discriminator.trainable_weights
-        gradients = tape.gradient(losses["loss_sum"], trainable_weights)
-        optimizer.apply_gradients(zip(gradients, trainable_weights))
-        return losses
-
-    def synth_discriminator_training_step(self, synth_training_set, optimizer):
-        real_imgs, fake_imgs = self.get_synth_discriminator_batch(synth_training_set)
-        with tf.GradientTape() as tape:
-            if tf.math.equal(self.step % self.D_reg_interval, 0):
-                """With r1 regulation."""
-                losses, D_reg = compute_stylegan_discriminator_loss(
-                    self.synth_discriminator,  # self.synth_discriminator,
-                    real_imgs,
-                    fake_imgs,
-                    self.gamma,
-                    compute_reg=True,
-                )
-
-                losses["loss_sum"] += tf.reduce_mean(D_reg * self.D_reg_interval)
-            else:
-                losses, _ = compute_stylegan_discriminator_loss(
-                    self.synth_discriminator,  # self.synth_discriminator,
-                    real_imgs,
-                    fake_imgs,
-                    self.gamma,
-                    compute_reg=False,
-                )
-        if losses["loss_sum"] is None:
-            print("synth_discriminator_training_step")
-            breakpoint()
-        trainable_weights = self.synth_discriminator.trainable_weights
-        # trainable_weights = self.discriminator.trainable_weights
         gradients = tape.gradient(losses["loss_sum"], trainable_weights)
         optimizer.apply_gradients(zip(gradients, trainable_weights))
         return losses
@@ -643,13 +628,15 @@ class ConfigNetFirstStage:
             #     )
             # GAN loss for synth
 
-            discriminator_output_synth, synth_latents_pred = self.synth_discriminator(
-                generator_output_synth, training=True,
+            discriminator_output_synth, synth_latents_pred = self.discriminator(
+                generator_output_synth,
+                training=True,
             )
 
             # GAN loss for real
             discriminator_output_real, real_latents_pred = self.discriminator(
-                generator_output_real, training=True,
+                generator_output_real,
+                training=True,
             )
 
             if tf.math.equal(self.step % self.D_reg_interval, 0):
@@ -801,13 +788,8 @@ class ConfigNetFirstStage:
             self.step = step
             for _ in range(self.config["n_discriminator_updates"]):
                 d_loss = self.discriminator_training_step(
-                    real_training_set, discriminator_optimizer
+                    real_training_set, synth_training_set, discriminator_optimizer
                 )
-
-                synth_d_loss = self.synth_discriminator_training_step(
-                    synth_training_set, discriminator_optimizer
-                )
-
                 latent_d_loss = self.latent_discriminator_training_step(
                     synth_training_set, discriminator_optimizer
                 )
@@ -822,15 +804,14 @@ class ConfigNetFirstStage:
             print(
                 "[D loss: %f] [synth_D loss: %f] [latent_D_loss: %f] [G loss: %f]"
                 % (
-                    d_loss["loss_sum"],
-                    synth_d_loss["loss_sum"],
+                    d_loss["real_d_loss"],
+                    d_loss["synth_d_loss"],
                     latent_d_loss["loss_sum"],
                     g_loss["loss_sum"],
                 )
             )
             confignet_utils.update_loss_dict(self.g_losses, g_loss)
             confignet_utils.update_loss_dict(self.d_losses, d_loss)
-            confignet_utils.update_loss_dict(self.synth_d_losses, synth_d_loss)
             confignet_utils.update_loss_dict(self.latent_d_losses, latent_d_loss)
 
             iteration_time = training_iteration_end - training_iteration_start
