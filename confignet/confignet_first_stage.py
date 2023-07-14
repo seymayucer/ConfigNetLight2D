@@ -25,13 +25,12 @@ from confignet.modules.stylegan2_discriminator import StyleGAN2Discriminator
 from confignet.modules.stylegan2_generator import StyleGAN2Generator
 from confignet.modules.building_blocks import MLPSimple
 from confignet.metrics.metrics import InceptionMetrics
-from confignet.modules.hologan_discriminator import HologanLatentRegressor
+
 from confignet.metrics.metrics import ControllabilityMetrics
 from confignet.losses import (
     compute_stylegan_discriminator_loss,
     compute_latent_discriminator_loss,
     compute_stylegan_generator_loss,
-    eye_loss,
     GAN_G_loss,
     compute_latent_regression_loss,
 )
@@ -48,7 +47,7 @@ class ConfigNetFirstStage:
         self.generator_smoothed = None
         self.discriminator = None
         self.combined_model = None
-        self.latent_regressor = None
+
         self.latent_discriminator = None
 
         self.log_writer = None
@@ -101,7 +100,6 @@ class ConfigNetFirstStage:
         weights["generator_weights"] = self.generator.get_weights()
         weights["generator_smoothed_weights"] = self.generator_smoothed.get_weights()
         weights["discriminator_weights"] = self.discriminator.get_weights()
-        weights["latent_regressor_weights"] = self.latent_regressor.get_weights()
         weights["synthetic_encoder_weights"] = self.synthetic_encoder.get_weights()
 
         weights[
@@ -114,7 +112,6 @@ class ConfigNetFirstStage:
         self.generator.set_weights(weights["generator_weights"])
         self.generator_smoothed.set_weights(weights["generator_smoothed_weights"])
         self.discriminator.set_weights(weights["discriminator_weights"])
-        self.latent_regressor.set_weights(weights["latent_regressor_weights"])
         self.synthetic_encoder.set_weights(weights["synthetic_encoder_weights"])
         self.latent_discriminator.set_weights(weights["latent_discriminator_weights"])
 
@@ -240,10 +237,7 @@ class ConfigNetFirstStage:
                 "initial_from_rgb_layer_in_discr"
             ],
         }
-        self.latent_regressor = HologanLatentRegressor(
-            self.config["latent_dim"], **discriminiator_args
-        )
-        self.latent_regressor.build(discriminator_input_shape)
+   
 
     def synth_data_image_checkpoint(self, output_dir):
         step_number = self.get_training_step_number()
@@ -466,7 +460,7 @@ class ConfigNetFirstStage:
                 os.makedirs(checkpoint_output_dir)
             print("Saving checkpoint")
             self.save(checkpoint_output_dir, "final")
-            if step_number == 50000 or step_number == 60000:
+            if step_number % 20000 == 0:
                 self.save(checkpoint_output_dir, str(step_number).zfill(6))
             # # str(step_number).zfill(6))
 
@@ -613,20 +607,15 @@ class ConfigNetFirstStage:
             generator_output_real = self.generator(real_latents)
 
             # image loss 0
-            if int(self.config["gan_loss_test"][0]):
-                losses["image_loss"] = self.config[
-                    "image_loss_weight"
-                ] * self.perceptual_loss.loss(gt_imgs, generator_output_synth)
-                # losses["focal"] = 1 * self.focal_frequency_loss(
-                #     tf.transpose(gt_imgs, perm=[0, 3, 1, 2]),
-                #     tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
-                # )
-            # eye loss 1
-            # if int(self.config["gan_loss_test"][1]):
-            #     losses["eye_loss"] = self.config["eye_loss_weight"] * eye_loss(
-            #         gt_imgs, generator_output_synth, eye_masks
-            #     )
-            # GAN loss for synth
+          
+            losses["image_loss"] = self.config[
+                "image_loss_weight"
+            ] * self.perceptual_loss.loss(gt_imgs, generator_output_synth)
+            # losses["focal"] = 1 * self.focal_frequency_loss(
+            #     tf.transpose(gt_imgs, perm=[0, 3, 1, 2]),
+            #     tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
+            # )
+        
 
             discriminator_output_synth, synth_latents_pred = self.discriminator(
                 generator_output_synth,
@@ -673,42 +662,25 @@ class ConfigNetFirstStage:
             losses["GAN_loss_real"] = G_loss_real
             losses["GAN_loss_synth"] = G_loss_synth
 
+        
             # Domain adverserial loss
-
-            if int(self.config["gan_loss_test"][2]):
-                # Domain adverserial loss
-                latent_discriminator_output = self.latent_discriminator(synth_latents)
-                latent_gan_loss = GAN_G_loss(latent_discriminator_output)
-                losses["latent_GAN_loss"] = (
-                    self.config["domain_adverserial_loss_weight"] * latent_gan_loss
-                )
-
+            latent_discriminator_output = self.latent_discriminator(synth_latents)
+            latent_gan_loss = GAN_G_loss(latent_discriminator_output)
+            losses["latent_GAN_loss"] = (
+                self.config["domain_adverserial_loss_weight"] * latent_gan_loss
+            )
             # Latent regression loss start
-            if int(self.config["gan_loss_test"][3]):
-                # Latent regression loss start
-                stacked_latent_vectors = tf.concat(
-                    (synth_latents, real_latents), axis=0
-                )
-                stacked_generated_imgs = tf.concat(
-                    (generator_output_synth, generator_output_real), axis=0
-                )
-                # stacked_rotations = tf.concat(
-                #     (synth_rotations, real_rotations), axis=0)
-                latent_regression_labels = stacked_latent_vectors
-
-                # Regression of Z and rotation from output image
-                losses["latent_regression_loss"] = compute_latent_regression_loss(
-                    stacked_generated_imgs, latent_regression_labels
-                )
-                # identity loss it is not workking well
-                # losses["latent_regression_loss"] = self.config[
-                #     "latent_regression_weight"
-                # ] * tf.reduce_mean(tf.square(synth_latents - synth_latents_pred))
+          
+            # identity loss it is not workking well
+            # losses["latent_regression_loss"] = self.config[
+            #     "latent_regression_weight"
+            # ] * tf.reduce_mean(tf.square(synth_latents - synth_latents_pred))
+                
+                
             losses["loss_sum"] = tf.reduce_sum(list(losses.values()))
 
         trainable_weights = (
             self.generator.trainable_weights
-            # self.latent_regressor.trainable_weights
             + self.synthetic_encoder.trainable_weights
         )
 

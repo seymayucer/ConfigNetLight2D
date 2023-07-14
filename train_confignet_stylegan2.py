@@ -57,13 +57,13 @@ def parse_args(args):
         "--stage_1_training_steps",
         type=int,
         help="Number of training steps in first stage training",
-        default=100000,
+        default=150000,
     )
     parser.add_argument(
         "--stage_2_training_steps",
         type=int,
         help="Number of training steps in second stage training",
-        default=100000,
+        default=150000,
     )
     parser.add_argument(
         "--n_samples_for_metrics",
@@ -71,12 +71,7 @@ def parse_args(args):
         help="Number of samples used in training-time metrics",
         default=1000,
     )
-    parser.add_argument(
-        "--gan_loss_test",
-        type=str,
-        help="test for gan loss parameters",
-        default="1111",
-    )
+  
     args = parser.parse_args(args)
     training_utils.initialize_random_seed(0)
 
@@ -106,7 +101,7 @@ def parse_args(args):
     config = {
         "batch_size": args.batch_size,
         "output_shape": real_training_set.imgs.shape[1:],
-        "gan_loss_test": args.gan_loss_test,
+     
     }
     config = confignet.confignet_utils.merge_configs(DEFAULT_CONFIG, config)
     synth_training_set.process_metadata(config, True)

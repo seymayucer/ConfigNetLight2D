@@ -70,25 +70,7 @@ class ConfigNet(ConfigNetFirstStage):
         )
         self.encoder(np.zeros((1, *self.config["output_shape"]), np.float32))
 
-        # # Used in identity loss, described in supplementary
-        # discriminiator_args = {
-        #     "img_shape": self.config["output_shape"][:2],
-        #     "num_resample": self.config["n_discr_layers"],
-        #     "disc_kernel_size": self.config["discr_conv_kernel_size"],
-        #     "disc_expansion_factor": self.config["n_discr_features_at_layer_0"],
-        #     "disc_max_feature_maps": self.config["max_discr_filters"],
-        #     "initial_from_rgb_layer_in_discr": self.config[
-        #         "initial_from_rgb_layer_in_discr"
-        #     ],
-        # }
-        # discriminator_input_shape = tuple(
-        #     [self.config["batch_size"]] + list(self.config["output_shape"])
-        # )
-        # self.latent_regressor = HologanLatentRegressor(
-        #     self.config["latent_dim"], **discriminiator_args
-        # )
-        # self.latent_regressor.build(discriminator_input_shape)
-
+ 
     def image_checkpoint(self, output_dir):
         self.synth_data_image_checkpoint(output_dir)
 
@@ -149,35 +131,7 @@ class ConfigNet(ConfigNetFirstStage):
 
         return tf.reduce_mean(loss_vals)
 
-    def compute_normalized_latent_regression_loss(self, generator_outputs, labels):
-        latent_regressor_output = self.latent_regressor(generator_outputs)
-
-        denominator = tf.sqrt(
-            tf.math.reduce_variance(labels, axis=0, keepdims=True) + 1e-3
-        )
-        # Do not normalize the rotation element
-        # denominator = tf.concat((denominator[:, :-3], tf.ones((1, 3), tf.float32)), axis=1)
-
-        latent_regressor_output = (
-            tf.reduce_mean(latent_regressor_output, axis=0)
-            + (
-                latent_regressor_output
-                - tf.reduce_mean(latent_regressor_output, axis=0)
-            )
-            / denominator
-        )
-        labels = (
-            tf.reduce_mean(labels, axis=0)
-            + (labels - tf.reduce_mean(labels, axis=0)) / denominator
-        )
-
-        latent_regression_loss = tf.losses.mean_squared_error(
-            labels, latent_regressor_output
-        )
-        latent_regression_loss = tf.reduce_mean(latent_regression_loss)
-        latent_regression_loss *= self.config["latent_regression_weight"]
-
-        return latent_regression_loss
+   
 
     def sample_random_batch_of_images(self, dataset, batch_size=None):
         if batch_size is None:
@@ -268,16 +222,16 @@ class ConfigNet(ConfigNetFirstStage):
                 "image_loss_weight"
             ] * self.perceptual_loss.loss(real_imgs, generator_output_real)
             # losses["eye_loss"] = self.config["eye_loss_weight"] * eye_loss(
-            #     synth_imgs, generator_output_synth, eye_masks
+            #     synth_imgs, generator_output_synth, eye_maskss
             # )
-            losses["focal_synth"] = 1 * self.focal_frequency_loss(
-                tf.transpose(synth_imgs, perm=[0, 3, 1, 2]),
-                tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
-            )
-            losses["focal_real"] = 1 * self.focal_frequency_loss(
-                tf.transpose(real_imgs, perm=[0, 3, 1, 2]),
-                tf.transpose(generator_output_real, perm=[0, 3, 1, 2]),
-            )
+            # losses["focal_synth"] = 1 * self.focal_frequency_loss(
+            #     tf.transpose(synth_imgs, perm=[0, 3, 1, 2]),
+            #     tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
+            # )
+            # losses["focal_real"] = 1 * self.focal_frequency_loss(
+            #     tf.transpose(real_imgs, perm=[0, 3, 1, 2]),
+            #     tf.transpose(generator_output_real, perm=[0, 3, 1, 2]),
+            # )
 
             # GAN loss for synth
             discriminator_output_synth, _ = self.discriminator(
@@ -356,7 +310,7 @@ class ConfigNet(ConfigNetFirstStage):
 
         trainable_weights = (
             self.generator.trainable_weights
-            # + self.latent_regressor.trainable_weights
+           
             + self.synthetic_encoder.trainable_weights
         )
         trainable_weights += self.encoder.trainable_weights
