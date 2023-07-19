@@ -31,7 +31,7 @@ from confignet.losses import (
     eye_loss,
 )
 
-from .confignet_first_stage import ConfigNetFirstStage
+from confignet_first_stage import ConfigNetFirstStage
 
 
 class ConfigNet(ConfigNetFirstStage):
@@ -70,7 +70,6 @@ class ConfigNet(ConfigNetFirstStage):
         )
         self.encoder(np.zeros((1, *self.config["output_shape"]), np.float32))
 
- 
     def image_checkpoint(self, output_dir):
         self.synth_data_image_checkpoint(output_dir)
 
@@ -130,8 +129,6 @@ class ConfigNet(ConfigNetFirstStage):
         loss_vals = self.perceptual_loss_face_reco.loss(gen_imgs, gt_imgs)
 
         return tf.reduce_mean(loss_vals)
-
-   
 
     def sample_random_batch_of_images(self, dataset, batch_size=None):
         if batch_size is None:
@@ -309,9 +306,7 @@ class ConfigNet(ConfigNetFirstStage):
             losses["loss_sum"] = tf.reduce_sum(list(losses.values()))
 
         trainable_weights = (
-            self.generator.trainable_weights
-           
-            + self.synthetic_encoder.trainable_weights
+            self.generator.trainable_weights + self.synthetic_encoder.trainable_weights
         )
         trainable_weights += self.encoder.trainable_weights
         gradients = tape.gradient(losses["loss_sum"], trainable_weights)
@@ -485,7 +480,7 @@ class ConfigNet(ConfigNetFirstStage):
         if len(input_images.shape) == 3:
             input_images = input_images[np.newaxis]
 
-        predicted_embeddings, predicted_rotations = self.encoder.predict(input_images)
+        predicted_embeddings = self.encoder.predict(input_images)
         if force_neutral_expression:
             n_exp_blendshapes = self.config["facemodel_inputs"]["blendshape_values"][0]
             neutral_expr_params = np.zeros((1, n_exp_blendshapes), np.float32)
