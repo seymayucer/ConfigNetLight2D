@@ -2,8 +2,6 @@
 # Licensed under the MIT License.
 from .confignet_first_stage import ConfigNetFirstStage
 from .confignet_second_stage import ConfigNet
-
-# from .confignet_second_stage import ConfigNet
 from .latent_gan import LatentGAN
 
 from .neural_renderer_dataset import NeuralRendererDataset
@@ -25,8 +23,6 @@ from .inference import Inferencer
 # from PIL import Image
 from .configs import DEFAULT_CONFIG
 from . import confignet_utils
-
+from . import get_FID
 from .modules.stylegan2_generator import StyleGAN2Generator
 from .modules.stylegan2_discriminator import StyleGAN2Discriminator
-
-

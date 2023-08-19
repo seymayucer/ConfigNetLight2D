@@ -42,22 +42,13 @@ class ControllabilityMetrics:
         param_idx = self.facemodel_param_names.index(
             attribute_config.facemodel_param_name
         )
-        if isinstance(param_value, dict):
-            if attribute_config.facemodel_param_name == "blendshape_values":
-                # labels for each dimension of given facemodel param
-                facemodel_params[param_idx][:] = 0
-                for key, value in param_value.items():
-                    idx = blendshape_names.index(key)
-                    facemodel_params[param_idx][:, idx] = value
-            else:
-                raise NotImplementedError
-        else:
-            facemodel_params[param_idx][:] = param_value
+
+        facemodel_params[param_idx][:] = param_value
 
         return facemodel_params
 
     def get_images_for_controllable_attribute(
-        self, attribute_config, latent_vectors, rotations, other_param=False
+        self, attribute_config, latent_vectors, other_param=False
     ):
         facemodel_params = self.get_facemodel_params_for_config(
             attribute_config, other_param
@@ -82,9 +73,7 @@ class ControllabilityMetrics:
             :, start_idx:end_idx
         ] = latent_vector_with_attribute_set[0, start_idx:end_idx]
 
-        output_imgs = self.confinet_model.generate_images(
-            modified_latent_vectors, rotations
-        )
+        output_imgs = self.confinet_model.generate_images(modified_latent_vectors)
 
         return output_imgs
 
@@ -99,11 +88,11 @@ class ControllabilityMetrics:
 
             for img in input_images:
                 img = img[np.newaxis]
-                latent_vectors, rotations = self.confinet_model.fine_tune_on_img(
+                latent_vectors = self.confinet_model.fine_tune_on_img(
                     img, n_iters=self.per_image_tuning_iters
                 )
                 raw_decoded_images.append(
-                    self.confinet_model.generate_images(latent_vectors, rotations)[0]
+                    self.confinet_model.generate_images(latent_vectors)[0]
                 )
 
                 for (
@@ -111,13 +100,15 @@ class ControllabilityMetrics:
                     attribute_config,
                 ) in ControllabilityMetricConfigs.all_configs():
                     image_with_attribute = self.get_images_for_controllable_attribute(
-                        attribute_config, latent_vectors, rotations
+                        attribute_config, latent_vectors
                     )[0]
-                    image_without_attribute = self.get_images_for_controllable_attribute(
-                        attribute_config, latent_vectors, rotations, other_param=True
-                    )[
-                        0
-                    ]
+                    image_without_attribute = (
+                        self.get_images_for_controllable_attribute(
+                            attribute_config,
+                            latent_vectors,
+                            other_param=True,
+                        )[0]
+                    )
                     images_with_attributes[config_name].append(image_with_attribute)
                     images_without_attributes[config_name].append(
                         image_without_attribute
@@ -131,10 +122,8 @@ class ControllabilityMetrics:
                     images_without_attributes[key]
                 )
         else:
-            latent_vectors, rotations = self.confinet_model.encode_images(input_images)
-            raw_decoded_images = self.confinet_model.generate_images(
-                latent_vectors, rotations
-            )
+            latent_vectors = self.confinet_model.encode_images(input_images)
+            raw_decoded_images = self.confinet_model.generate_images(latent_vectors)
             images_with_attributes = {}
             images_without_attributes = {}
             for (
@@ -142,10 +131,10 @@ class ControllabilityMetrics:
                 attribute_config,
             ) in ControllabilityMetricConfigs.all_configs():
                 images_with_attribute = self.get_images_for_controllable_attribute(
-                    attribute_config, latent_vectors, rotations
+                    attribute_config, latent_vectors
                 )
                 images_without_attribute = self.get_images_for_controllable_attribute(
-                    attribute_config, latent_vectors, rotations, other_param=True
+                    attribute_config, latent_vectors, other_param=True
                 )
                 images_with_attributes[config_name] = images_with_attribute
                 images_without_attributes[config_name] = images_without_attribute
@@ -156,8 +145,9 @@ class ControllabilityMetrics:
         self, set_attributes, not_set_attributes, attribute_config
     ):
         attribute_names = self.attribute_classifier.config["predicted_attributes"]
-
+        # breakpoint()
         # This attribute is expected to change
+
         driven_attribute_idx = attribute_names.index(attribute_config.driven_attribute)
         # These attributes are not expected to be constant
         changing_attribute_names = attribute_config.ignored_attributes + [
@@ -235,6 +225,7 @@ class ControllabilityMetrics:
         if img_output_dir is not None:
             os.makedirs(img_output_dir, exist_ok=True)
             for i in range(len(input_images)):
+              
                 cv2.imwrite(
                     os.path.join(img_output_dir, "gt_img_%04d.png" % i), input_images[i]
                 )
@@ -278,7 +269,7 @@ class ControllabilityMetrics:
         return metrics
 
     def update_and_log_metrics(
-        self, images, metrics_dict, output_dir,  tb_log_writer=None
+        self, images, metrics_dict, output_dir, tb_log_writer=None
     ):
         os.makedirs(output_dir, exist_ok=True)
 
@@ -289,7 +280,6 @@ class ControllabilityMetrics:
                 metrics_dict[key] = []
             metrics_dict[key].append(value)
 
-      
         if tb_log_writer is not None:
             with tb_log_writer.as_default():
                 for key, value in new_metrics.items():
@@ -349,7 +339,7 @@ class InceptionMetrics:
         return kid, fid
 
     def update_and_log_metrics(
-        self, images, metrics_dict, output_dir,  tb_log_writer=None
+        self, images, metrics_dict, output_dir, tb_log_writer=None
     ):
         os.makedirs(output_dir, exist_ok=True)
 
@@ -371,7 +361,6 @@ class InceptionMetrics:
         else:
             step_numbers_for_logs = range(len(metrics_dict["kid"]))
 
-       
         ax = plt.gca()
         color = "tab:blue"
         ax.set_ylabel("KID", color=color)
@@ -402,4 +391,3 @@ class InceptionMetrics:
             metrics_values_for_txt,
             header=header,
         )
-

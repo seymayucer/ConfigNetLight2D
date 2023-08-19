@@ -49,7 +49,7 @@ class ConfigNetFirstStage:
         self.combined_model = None
 
         self.latent_discriminator = None
-
+        self.best_fid = 10000
         self.log_writer = None
         self.g_losses = {}
         self.d_losses = {}
@@ -121,7 +121,6 @@ class ConfigNetFirstStage:
             if "loss_sum" not in self.g_losses.keys()
             else len(self.g_losses["loss_sum"]) - 1
         )
-
         return step_number
 
     def get_batch_size(self):
@@ -140,6 +139,16 @@ class ConfigNetFirstStage:
         self.g_losses = log_dict["g_losses"]
         self.d_losses = log_dict["d_losses"]
         self.metrics = log_dict["metrics"]
+
+    def sample_facemodel_params(self, n_samples):
+        facemodel_params_from_distr = []
+
+        for input_name in self.config["facemodel_inputs"].keys():
+            facemodel_params_from_distr.append(
+                self.facemodel_param_distributions[input_name].sample(n_samples)[0]
+            )
+
+        return facemodel_params_from_distr
 
     def save(self, output_dir, output_filename):
         weights = self.get_weights()
@@ -237,7 +246,13 @@ class ConfigNetFirstStage:
                 "initial_from_rgb_layer_in_discr"
             ],
         }
-   
+
+    def _get_generator_kwargs(self):
+        return {
+            "resolution": self.config["output_shape"][0],
+            "config": self.config["config"],
+            "impl": self.config["impl"],
+        }
 
     def synth_data_image_checkpoint(self, output_dir):
         step_number = self.get_training_step_number()
@@ -429,16 +444,16 @@ class ConfigNetFirstStage:
         if "training_step_number" not in self.metrics.keys():
             self.metrics["training_step_number"] = []
         self.metrics["training_step_number"].append(number_of_completed_iters)
-        self._inception_metric_object.update_and_log_metrics(
+        current_fid = self._inception_metric_object.update_and_log_metrics(
             generated_images, self.metrics, output_dir, self.log_writer
         )
+        return current_fid
 
     def run_checkpoints(self, output_dir, iteration_time, checkpoint_start=None):
         checkpoint_start = time.process_time()
         step_number = self.get_training_step_number()
 
         if step_number % self.config["image_checkpoint_period"] == 0:
-
             confignet_utils.log_loss_vals(
                 self.latent_d_losses,
                 output_dir,
@@ -454,15 +469,21 @@ class ConfigNetFirstStage:
 
         if step_number % self.config["metrics_checkpoint_period"] == 0:
             print("Running metrics")
-            self.calculate_metrics(output_dir)
+            current_fid = self.calculate_metrics(output_dir)
             checkpoint_output_dir = os.path.join(output_dir, "checkpoints")
             if not os.path.exists(checkpoint_output_dir):
                 os.makedirs(checkpoint_output_dir)
             print("Saving checkpoint")
-            self.save(checkpoint_output_dir, "final")
-            if step_number % 20000 == 0:
+
+            if current_fid is not None:
+                if current_fid < self.best_fid:
+                    self.save(checkpoint_output_dir, "best")
+                    self.best_fid = current_fid
+
+            if step_number % 10000 == 0:
                 self.save(checkpoint_output_dir, str(step_number).zfill(6))
-            # # str(step_number).zfill(6))
+
+            self.save(checkpoint_output_dir, "final")
 
         if step_number % self.config["image_checkpoint_period"] == 0:
             self.image_checkpoint(output_dir)
@@ -607,7 +628,6 @@ class ConfigNetFirstStage:
             generator_output_real = self.generator(real_latents)
 
             # image loss 0
-          
             losses["image_loss"] = self.config[
                 "image_loss_weight"
             ] * self.perceptual_loss.loss(gt_imgs, generator_output_synth)
@@ -615,7 +635,6 @@ class ConfigNetFirstStage:
             #     tf.transpose(gt_imgs, perm=[0, 3, 1, 2]),
             #     tf.transpose(generator_output_synth, perm=[0, 3, 1, 2]),
             # )
-        
 
             discriminator_output_synth, synth_latents_pred = self.discriminator(
                 generator_output_synth,
@@ -662,7 +681,6 @@ class ConfigNetFirstStage:
             losses["GAN_loss_real"] = G_loss_real
             losses["GAN_loss_synth"] = G_loss_synth
 
-        
             # Domain adverserial loss
             latent_discriminator_output = self.latent_discriminator(synth_latents)
             latent_gan_loss = GAN_G_loss(latent_discriminator_output)
@@ -670,18 +688,16 @@ class ConfigNetFirstStage:
                 self.config["domain_adverserial_loss_weight"] * latent_gan_loss
             )
             # Latent regression loss start
-          
+
             # identity loss it is not workking well
             # losses["latent_regression_loss"] = self.config[
             #     "latent_regression_weight"
             # ] * tf.reduce_mean(tf.square(synth_latents - synth_latents_pred))
-                
-                
+
             losses["loss_sum"] = tf.reduce_sum(list(losses.values()))
 
         trainable_weights = (
-            self.generator.trainable_weights
-            + self.synthetic_encoder.trainable_weights
+            self.generator.trainable_weights + self.synthetic_encoder.trainable_weights
         )
 
         gradients = tape.gradient(losses["loss_sum"], trainable_weights)
@@ -695,7 +711,6 @@ class ConfigNetFirstStage:
         synth_training_set,
         n_samples_for_metrics,
         real_training_set,
-        validation_set,
     ):
         if real_training_set is None:
             real_training_set = synth_training_set
@@ -744,7 +759,6 @@ class ConfigNetFirstStage:
             synth_training_set,
             n_samples_for_metrics,
             real_training_set=real_training_set,
-            validation_set=validation_set,
         )
         start_step = self.get_training_step_number()
         print(f"Starting training at step {start_step}")
@@ -804,7 +818,7 @@ class ConfigNetFirstStage:
         self,
         latent,
         unused_expr_idxs=None,
-        param_name="blendshape_values",
+        param_name="nose_features",
         n_iters=2000,
         learning_rate=0.05,
         verbose=False,

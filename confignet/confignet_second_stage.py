@@ -28,10 +28,11 @@ from confignet.losses import (
     compute_latent_discriminator_loss,
     compute_stylegan_generator_loss,
     GAN_D_loss,
+    GAN_G_loss,
     eye_loss,
 )
 
-from confignet_first_stage import ConfigNetFirstStage
+from confignet.confignet_first_stage import ConfigNetFirstStage
 
 
 class ConfigNet(ConfigNetFirstStage):
@@ -50,6 +51,7 @@ class ConfigNet(ConfigNetFirstStage):
 
         if initialize:
             self.initialize_network()
+        self.best_fid = 999999
 
     def get_weights(self):
         weights = super().get_weights()
@@ -83,7 +85,7 @@ class ConfigNet(ConfigNetFirstStage):
         generated_images = self.generate_images(latent)
         parameter_name = "skin_color"
         skin_color_latents = latent
-        gt_imgs_0_255 = ((gt_imgs.numpy() + 1) * 127.5).astype(np.uint8)
+        gt_imgs_0_255 = ((gt_imgs + 1) * 127.5).astype(np.uint8)
         combined_images = np.vstack((gt_imgs_0_255, generated_images))
         for idns in range(5):
             new_param_value = self.facemodel_param_distributions[parameter_name].sample(
@@ -315,14 +317,49 @@ class ConfigNet(ConfigNetFirstStage):
         return losses
 
     def calculate_metrics(self, output_dir):
-        generated_images = self.generate_output_for_metrics()
-        number_of_completed_iters = self.get_training_step_number()
+        super(ConfigNet, self).calculate_metrics(output_dir)
 
-        if "training_step_number" not in self.metrics.keys():
-            self.metrics["training_step_number"] = []
-        self.metrics["training_step_number"].append(number_of_completed_iters)
-        self._inception_metric_object.update_and_log_metrics(
-            generated_images, self.metrics, output_dir, self.log_writer
+        self.controllability_metrics.update_and_log_metrics(
+            self._generator_input_for_metrics["input_images"],
+            self.metrics,
+            output_dir,
+            self.log_writer,
+        )
+
+        latents = self.encode_images(self._generator_input_for_metrics["input_images"])
+        # generator_input_dict = self.generator_smoothed.build_input_dict(latents)
+        generated_images = self.generator_smoothed.predict(latents)
+
+        metric_batch_size = 16
+        n_valid_samples = len(self._generator_input_for_metrics["input_images"])
+        n_batches = 1 + n_valid_samples // metric_batch_size
+        perceptual_loss = []
+
+        for i in range(n_batches):
+            start_idx = i * metric_batch_size
+            end_idx = min(n_valid_samples, (i + 1) * metric_batch_size)
+            gt_imgs = self._generator_input_for_metrics["input_images"][
+                start_idx:end_idx
+            ]
+            gen_imgs = generated_images[start_idx:end_idx]
+            loss = self.perceptual_loss.loss(gt_imgs, gen_imgs)
+            perceptual_loss.append(loss)
+
+        perceptual_loss = float(np.mean(perceptual_loss))
+
+        if "perceptual_loss" not in self.metrics.keys():
+            self.metrics["perceptual_loss"] = []
+        self.metrics["perceptual_loss"].append(perceptual_loss)
+        with self.log_writer.as_default():
+            tf.summary.scalar(
+                "metrics/perceptual_loss",
+                perceptual_loss,
+                step=self.get_training_step_number(),
+            )
+
+        np.savetxt(
+            os.path.join(output_dir, "image_metrics.txt"),
+            self.metrics["perceptual_loss"],
         )
 
     def setup_training(
@@ -334,45 +371,14 @@ class ConfigNet(ConfigNetFirstStage):
         real_training_set,
         validation_set,
     ):
-        if real_training_set is None:
-            real_training_set = synth_training_set
-
-        os.makedirs(log_dir, exist_ok=True)
-        self.log_writer = tf.summary.create_file_writer(log_dir)
-
-        self._inception_metric_object = InceptionMetrics(self.config, real_training_set)
-
-        self._generator_input_for_metrics = {}
-        self._generator_input_for_metrics["latent"] = self.sample_latent_vector(
-            n_samples_for_metrics
+        super(ConfigNet, self).setup_training(
+            log_dir, synth_training_set, n_samples_for_metrics, real_training_set
         )
-
-        checkpoint_latent = self.sample_latent_vector(self.n_checkpoint_samples)
-
-        self._checkpoint_visualization_input = {}
-        self._checkpoint_visualization_input["latent"] = checkpoint_latent
-
-        self.facemodel_param_distributions = (
-            synth_training_set.metadata_input_distributions
-        )
-
-        facemodel_params, gt_imgs = self.sample_synthetic_dataset(
-            synth_training_set, self.n_checkpoint_samples
-        )
-
-        for i, param in enumerate(facemodel_params):
-            facemodel_params[i] = np.tile(param, (1, 1))
-
-        self._checkpoint_visualization_input["facemodel_params"] = facemodel_params
-        self._checkpoint_visualization_input["gt_imgs"] = gt_imgs
 
         sample_idxs = np.random.randint(
             0, validation_set.imgs.shape[0], self.n_checkpoint_samples
         )
-        # checkpoint_input_imgs = validation_set.imgs[sample_idxs].astype(np.float32)
-        checkpoint_input_imgs = tf.convert_to_tensor(
-            validation_set.imgs[sample_idxs], dtype=tf.float32
-        )
+        checkpoint_input_imgs = validation_set.imgs[sample_idxs].astype(np.float32)
         self._checkpoint_visualization_input["input_images"] = (
             checkpoint_input_imgs / 127.5
         ) - 1.0
@@ -380,9 +386,7 @@ class ConfigNet(ConfigNetFirstStage):
         sample_idxs = np.random.randint(
             0, validation_set.imgs.shape[0], n_samples_for_metrics
         )
-        metric_input_imgs = tf.convert_to_tensor(
-            validation_set.imgs[sample_idxs], dtype=tf.float32
-        )
+        metric_input_imgs = validation_set.imgs[sample_idxs].astype(np.float32)
         self._generator_input_for_metrics["input_images"] = (
             metric_input_imgs / 127.5
         ) - 1.0
@@ -457,6 +461,7 @@ class ConfigNet(ConfigNetFirstStage):
             input_images = (
                 tf.convert_to_tensor(input_images, dtype=tf.float32) / 127.5 - 1.0
             )
+        print(input_images.shape)
         embeddings = self.encoder.predict(input_images)
 
         return embeddings
@@ -482,10 +487,10 @@ class ConfigNet(ConfigNetFirstStage):
 
         predicted_embeddings = self.encoder.predict(input_images)
         if force_neutral_expression:
-            n_exp_blendshapes = self.config["facemodel_inputs"]["blendshape_values"][0]
+            n_exp_blendshapes = self.config["facemodel_inputs"]["nose_features"][0]
             neutral_expr_params = np.zeros((1, n_exp_blendshapes), np.float32)
             predicted_embeddings = self.set_facemodel_param_in_latents(
-                predicted_embeddings, "blendshape_values", neutral_expr_params
+                predicted_embeddings, "mouth_features", neutral_expr_params
             )
 
         if self.generator_fine_tuned is None:
@@ -496,7 +501,7 @@ class ConfigNet(ConfigNetFirstStage):
             self.generator_fine_tuned(predicted_embeddings)
         self.generator_fine_tuned.set_weights(self.generator_smoothed.get_weights())
 
-        expr_idxs = self.get_facemodel_param_idxs_in_latent("blendshape_values")
+        expr_idxs = self.get_facemodel_param_idxs_in_latent("nose_features")
         mean_predicted_embedding = np.mean(predicted_embeddings, axis=0, keepdims=True)
 
         pre_expr_embeddings = tf.Variable(mean_predicted_embedding[:, : expr_idxs[0]])
@@ -506,7 +511,7 @@ class ConfigNet(ConfigNetFirstStage):
         )
         n_imgs = input_images.shape[0]
 
-        optimizer = keras.optimizers.Adam(lr=0.0001)
+        optimizer = keras.optimizers.Adam(learning_rate=0.0001)
         fake_y_real = np.ones((1, 1))
 
         convert_to_uint8 = lambda x: ((x[0] + 1) * 127.5).astype(np.uint8)
@@ -547,10 +552,12 @@ class ConfigNet(ConfigNetFirstStage):
                 )
 
                 # GAN loss for real
-                discriminator_output_real = self.discriminator(generator_output_real)
-                for i, disc_out in enumerate(discriminator_output_real.values()):
-                    gan_loss = GAN_G_loss(disc_out)
-                    losses["GAN_loss_real_" + str(i)] = gan_loss
+
+                discriminator_output_real, _ = self.discriminator(
+                    generator_output_real,
+                    training=True,
+                )
+                losses["GAN_loss_real"] = GAN_G_loss(discriminator_output_real)
 
                 # Domain adverserial loss
                 latent_discriminator_out_real = self.latent_discriminator(embeddings)
@@ -561,13 +568,9 @@ class ConfigNet(ConfigNetFirstStage):
                 )
 
                 # Latent regression loss start
-                latent_regression_labels = tf.concat(
-                    (
-                        embeddings,
-                        self.config["latent_regressor_rot_weight"],
-                    ),
-                    axis=-1,
-                )
+                # latent_regression_labels = tf.concat(
+                #     (embeddings, self.config["latent_regressor_rot_weight"],), axis=-1,
+                # )
 
                 # Regression of Z and rotation from output image
                 # losses[
@@ -587,8 +590,8 @@ class ConfigNet(ConfigNetFirstStage):
             gradients = tape.gradient(losses["loss_sum"], trainable_weights)
             optimizer.apply_gradients(zip(gradients, trainable_weights))
 
-            print(losses["loss_sum"])
-            if img_output_dir is not None:
+            if img_output_dir is not None and step_number % 50 == 0:
+                print("Saving image", img_output_dir)
                 cv2.imwrite(
                     os.path.join(img_output_dir, "output_%02d.png" % (step_number)),
                     convert_to_uint8(generator_output_real.numpy()),

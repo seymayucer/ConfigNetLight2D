@@ -203,9 +203,7 @@ class LatentGAN:
             predicted_embeddings = self.generator_smoothed.predict(
                 self.inputs_for_logs["latents"]
             )
-            generated_images = confignet_model.generate_images(
-                predicted_embeddings, self.inputs_for_logs["rotations"]
-            )
+            generated_images = confignet_model.generate_images(predicted_embeddings)
             combined_image = confignet_utils.build_image_matrix(
                 generated_images,
                 self.config["logging_img_square_size"],
@@ -224,9 +222,7 @@ class LatentGAN:
             predicted_embeddings = self.generator_smoothed.predict(
                 self.inputs_for_metrics["latents"]
             )
-            generated_images = confignet_model.generate_images(
-                predicted_embeddings, self.inputs_for_metrics["rotations"]
-            )
+            generated_images = confignet_model.generate_images(predicted_embeddings)
             kid, fid = self._inception_metric_object.get_metrics(generated_images)
             with self.log_writer.as_default():
                 tf.summary.scalar("metrics/kid", kid, step=step_number)
@@ -241,8 +237,6 @@ class LatentGAN:
         self.inputs_for_logs["latents"] = self.sample_input_latent_vector(
             n_logged_images
         )
-        self.inputs_for_logs["rotations"] = np.zeros((n_logged_images, 3), np.float32)
-
         self._inception_metric_object = InceptionMetrics(
             confignet_model.config,
             training_set,
@@ -251,9 +245,6 @@ class LatentGAN:
 
         self.inputs_for_metrics = {}
         self.inputs_for_metrics["latents"] = self.sample_input_latent_vector(
-            self.config["n_samples_for_metrics"]
-        )
-        self.inputs_for_metrics["rotations"] = confignet_model.sample_rotations(
             self.config["n_samples_for_metrics"]
         )
 
@@ -271,7 +262,7 @@ class LatentGAN:
 
             if chunk_end - chunk_begin == 0:
                 break
-            embeddings[chunk_begin:chunk_end], _ = confignet_model.encode_images(
+            embeddings[chunk_begin:chunk_end] = confignet_model.encode_images(
                 training_set.imgs[chunk_begin:chunk_end]
             )
 
@@ -298,5 +289,4 @@ class LatentGAN:
     def generate_latents(self, n_samples, truncation=1.0):
         input_latents = self.sample_input_latent_vector(n_samples) * truncation
         output_latents = self.generator_smoothed.predict(input_latents)
-
         return output_latents

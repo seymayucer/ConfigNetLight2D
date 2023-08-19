@@ -3,23 +3,22 @@ import numpy as np
 import os
 import sys
 from pathlib import Path
+import tqdm
 import tensorflow as tf
 import argparse
 
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.dirname(SCRIPT_DIR))
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from confignet.confignet_second_stage import ConfigNet
 from confignet.confignet_first_stage import ConfigNetFirstStage
-from confignet.neural_renderer_dataset import NeuralRendererDataset
-import tqdm
-
+from confignet.latent_gan import LatentGAN
 from confignet.metrics.inception_distance import (
     InceptionFeatureExtractor,
     compute_FID,
 )
+
 
 class FIDTest:
     def __init__(
@@ -29,25 +28,29 @@ class FIDTest:
         first_stage_model_path=None,
         latent_gan_model_path=None,
     ) -> None:
-        # if self.latentgan_model is not None:
-        #     self.latentgan_model = LatentGAN.load(latent_gan_model_path)
-
         self.test_output = Path(confignet_model_path).parent.parent
-        print("test_output", self.test_output)
+        self.file = open(self.test_output / "FID.txt", "w+")
 
-        print("Loading ConfigNet model...")
-        self.confignet_model = ConfigNet.load(confignet_model_path)
-
+        # FFHQ Test 10k
         self.test_image_path = test_image_path
         self.test_imgs_list = list(sorted(Path(self.test_image_path).glob("*.png")))
 
         self.inception_feature_extractor = InceptionFeatureExtractor((299, 299, 3))
-        print("Loading inception features...")
+
+        print("Loading LatentGAN model...")
+        if latent_gan_model_path is not None:
+            self.latentgan_model = LatentGAN.load(latent_gan_model_path)
+
+        print("Loading First Stage ConfigNet model...")
+        if first_stage_model_path is not None:
+            self.first_stage_model = ConfigNetFirstStage.load(first_stage_model_path)
+
+        print("Loading ConfigNet model...")
+        if confignet_model_path is not None:
+            self.confignet_model = ConfigNet.load(confignet_model_path)
 
         # rgb bgr
         self.idx = 0
-        if first_stage_model_path is not None:
-            self.first_stage_model = ConfigNetFirstStage.load(first_stage_model_path)
 
     @staticmethod
     def load_images(img_list):
@@ -131,6 +134,8 @@ class FIDTest:
 
         fid = compute_FID(generated_features, gt_features)
         print("FID score between tests:", fid)
+        self.file.write("\get_FID_from_random_samples: " + str(fid))
+
         return fid
 
     # example of calculating the frechet inception distance in Keras for cifar10
@@ -178,26 +183,8 @@ class FIDTest:
         fid = compute_FID(generated_inception_features, gt_inception_features)
 
         print("FID score:", fid)
+        self.file.write("\nget_fid_wout_finetune: " + str(fid))
         return fid
-
-    def generate_finetuned_images(self, n_images):
-        for i, a_path in enumerate(self.test_imgs_list):
-            output_path = f"{self.test_output}/finetuned_images/{i}.png"
-            if not os.path.exists(output_path):
-                gt_image = self.get_single_image(a_path)
-                print(i, n_images)
-
-                latent = self.confignet_model.encode_images(gt_image)
-
-                self.confignet_model.fine_tune_on_img(gt_image, 100)
-                generated = self.confignet_model.generator_fine_tuned(latent)
-                generated = np.clip(generated, -1.0, 1.0)
-                generated = ((generated + 1) * 127.5).astype(np.uint8)
-
-                tf.keras.utils.save_img(
-                    output_path,
-                    generated[0][:, :, ::-1],
-                )
 
     def get_fid(self, n_images):
         # keep track of average FID score
@@ -246,6 +233,56 @@ class FIDTest:
         fid = compute_FID(generated_inception_features, gt_inception_features)
 
         print("FID score:", fid)
+        self.file.write("\nget_fid: " + str(fid))
+        return fid
+
+    def get_fid_from_latentgan(self, n_images):
+        generated_inception_features = []
+        gt_inception_features = []
+
+        for i, a_path in enumerate(self.test_imgs_list[0:n_images]):
+            gt_image = self.get_single_image(a_path)
+            print(i, n_images)
+            # random latents from latent gan
+            latent = self.latentgan_model.generate_latents(1)
+
+            self.confignet_model.fine_tune_on_img(gt_image, 100)
+            generated = self.confignet_model.generator_fine_tuned(latent)
+            # min max value
+
+            generated = np.clip(generated, -1.0, 1.0)
+            generated = ((generated + 1) * 127.5).astype(np.uint8)
+
+            generated = self.resize_image(generated)
+            gt_image = self.resize_image(gt_image)
+
+            generated_inception_features.append(
+                self.inception_feature_extractor.get_features(generated)
+            )
+
+            gt_inception_features.append(
+                self.inception_feature_extractor.get_features(gt_image)
+            )
+
+            if Path(self.test_output / "latent_finetuned_images").exists() == False:
+                os.makedirs(self.test_output / "latent_finetuned_images")
+
+            tf.keras.utils.save_img(
+                f"{self.test_output}/latent_finetuned_images/{i}.png",
+                generated[0][:, :, ::-1],
+            )
+
+            self.confignet_model.generator_fine_tuned = None
+
+        generated_inception_features = np.concatenate(
+            generated_inception_features, axis=0
+        )
+        gt_inception_features = np.concatenate(gt_inception_features, axis=0)
+
+        fid = compute_FID(generated_inception_features, gt_inception_features)
+
+        print("FID score:", fid)
+        self.file.write("\nget_fid_from_latentgan: " + str(fid))
         return fid
 
 
@@ -263,6 +300,9 @@ def parse_args(args):
         "--first_stage_model_path", help="Path to the model to be evaluated"
     )
     parser.add_argument(
+        "--latent_gan_model_path", help="Path to the model to be evaluated"
+    )
+    parser.add_argument(
         "--test_image_path",
         help="Path to the test images",
         default="/home2/xcnf86/confignet_stylegan/FFHQ_test",
@@ -274,9 +314,9 @@ def parse_args(args):
         test_image_path=args.test_image_path,
         confignet_model_path=args.second_stage_model_path,
         first_stage_model_path=args.first_stage_model_path,
-        latent_gan_model_path=None,
+        latent_gan_model_path=args.latent_gan_model_path,
     )
-    fid_object.generate_finetuned_images(9999)
+
     # test1 between datasets
     # CELEBHQ_CLEAN_TRAIN_PATH = "/mnt/6TB/FaceDatasets/CelebHQ/CelebAMask-HQ_256x256_tight_cropped_augmented_clean"
     # score = fid_object.get_fid_from_2_datasets(
@@ -295,12 +335,14 @@ def parse_args(args):
     # score = fid_object.get_fid_wout_finetune(n_images=9999, batch_size=50)
     # print("[get_FID_from_random_samples] FID score:", score)
 
-    # finetuned = "/mnt/SSD/confignet_stylegan/ConfigNetLight2D/experiments/celeba_gr_percept_g2_d1_latent_gan/finetuned_images"
+    finetuned = "/mnt/SSD/ConfigNetLight2D/experiments/celeba_gr_percept_g2_d1_latent_gan/finetuned_images"
     # random = "/mnt/SSD/confignet_stylegan/ConfigNetLight2D/experiments/celeba_gr_percept_g2_d1_latent_gan/random_samples"
     # score = fid_object.get_fid_from_2_datasets(
     #     fdir1=args.test_image_path, fdir2=finetuned, batch_size=50
     # )
-    # print("[get_FID_from_random_samples] FID score:", score)
+    score = fid_object.get_fid_from_latentgan(n_images=9999)
+    # score = fid_object.get_fid_from_latentgan(n_images=9999, batch_size=50)
+    print("[get_FID_from_random_samples] FID score:", score)
 
 
 if __name__ == "__main__":

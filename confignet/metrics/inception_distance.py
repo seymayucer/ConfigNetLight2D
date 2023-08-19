@@ -7,6 +7,7 @@ import numpy as np
 import scipy
 
 
+
 class InceptionFeatureExtractor:
     def __init__(self, input_shape):
         self.model = inception_v3.InceptionV3(

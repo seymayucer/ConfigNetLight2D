@@ -20,7 +20,6 @@ import transformations
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
 from . import dataset_utils
-from .face_image_normalizer import FaceImageNormalizer
 from .metrics import inception_distance
 
 
@@ -154,13 +153,6 @@ class NeuralRendererDataset:
                 self.attributes.append(image_attributes[img_filename])
 
             self.imgs[i] = cv2.imread(image_paths[i])
-            # if self.is_synthetic:
-            #     eye_mask = self._get_eye_mask_for_image_path(image_paths[i])
-            #     self.eye_masks.append(eye_mask)
-        # print(self.is_synthetic)
-        # if self.is_synthetic:
-            
-        #     self.eye_masks = np.array(self.eye_masks)
 
         self._compute_inception_features()
         self.save(output_path)
@@ -168,7 +160,6 @@ class NeuralRendererDataset:
     def generate_synth_face_dataset(
         self, input_dir: str, output_path: str, attribute_label_file_path=None
     ) -> None:
-
         # df = pd.read_csv(attribute_label_file_path)
         param_folder = Path(input_dir).parent / "parameter_setup_4"
         df = pd.read_csv(param_folder / "attributes_nan_clean.csv")
@@ -196,7 +187,6 @@ class NeuralRendererDataset:
             # json_file_name = f'{input_json_dir}/{row["json_name"]}'
 
             if Path(img_file_name).exists():
-
                 if i % max([1, (total_image_num // 100)]) == 0:
                     perc_complete = 100 * i / total_image_num
                     print("Image reading %d%% complete" % (perc_complete))
@@ -284,7 +274,7 @@ class NeuralRendererDataset:
         # self.metadata_input_distributions["rotations"] = fit_distribution(
         #     self.render_metadata["head"], "exemplar"
         # )
-        print(self.render_metadata.keys(),config["facemodel_inputs"].keys())
+        print(self.render_metadata.keys(), config["facemodel_inputs"].keys())
         for input_name in config["facemodel_inputs"].keys():
             self.render_metadata[input_name] = self.render_metadata[input_name].astype(
                 np.float32

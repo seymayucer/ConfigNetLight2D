@@ -71,7 +71,7 @@ def parse_args(args):
         help="Number of samples used in training-time metrics",
         default=1000,
     )
-  
+
     args = parser.parse_args(args)
     training_utils.initialize_random_seed(0)
 
@@ -101,7 +101,6 @@ def parse_args(args):
     config = {
         "batch_size": args.batch_size,
         "output_shape": real_training_set.imgs.shape[1:],
-     
     }
     config = confignet.confignet_utils.merge_configs(DEFAULT_CONFIG, config)
     synth_training_set.process_metadata(config, True)
@@ -111,21 +110,21 @@ def parse_args(args):
     first_stage_output_dir = os.path.join(args.output_dir, "first_stage")
 
     print("first stage training")
-    first_stage_model.train(
-        real_training_set=real_training_set,
-        synth_training_set=synth_training_set,
-        validation_set=validation_set,
-        output_dir=first_stage_output_dir,
-        log_dir=args.log_dir,
-        n_steps=args.stage_1_training_steps,
-        n_samples_for_metrics=args.n_samples_for_metrics,
-    )
-    # first_stage_model = confignet.load_confignet(
-    #     os.path.join(first_stage_output_dir, "checkpoints/050000.json")
+    # first_stage_model.train(
+    #     real_training_set=real_training_set,
+    #     synth_training_set=synth_training_set,
+    #     validation_set=validation_set,
+    #     output_dir=first_stage_output_dir,
+    #     log_dir=args.log_dir,
+    #     n_steps=args.stage_1_training_steps,
+    #     n_samples_for_metrics=args.n_samples_for_metrics,
     # )
+    first_stage_model = confignet.load_confignet(
+        os.path.join(first_stage_output_dir, "checkpoints/final.json")
+    )
     first_stage_weights = first_stage_model.get_weights()
 
-    # ### second stage training
+    ### second stage training
     config["image_loss_weight"] *= 10  # increase image loss weight
     second_stage_model = confignet.ConfigNet(config)
     confignet.ConfigNetFirstStage.set_weights(second_stage_model, first_stage_weights)
